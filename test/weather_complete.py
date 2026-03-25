@@ -27,6 +27,14 @@ def parse_qwen_tool_use(raw_response):
     if not raw_response.content:
         return raw_response
 
+    # 如果第一个 block 是 ToolUseBlock，说明服务端已经转换好了
+    if raw_response.content[0].type == "tool_use":
+        return raw_response
+
+    # 否则尝试解析文本格式
+    if raw_response.content[0].type != "text":
+        return raw_response
+
     text = raw_response.content[0].text
 
     # 解析 <function=name>\n<parameter=key>\nvalue\n</parameter>\n</function> 格式
