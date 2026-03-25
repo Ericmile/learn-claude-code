@@ -6,13 +6,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 client = anthropic.Anthropic(
-    base_url="http://192.168.13.12:30001",
-    api_key="empty"
+    base_url=os.getenv("ANTHROPIC_BASE_URL"),
+    api_key=os.getenv("ANTHROPIC_API_KEY")
 )
 
 # 尝试发送一个带有 tools 参数的请求
 response = client.messages.create(
-    model="Qwen3.5-9B",
+    model=os.getenv("MODEL_ID"),
     max_tokens=1024,
     tools=[{
         "name": "get_weather",
