@@ -74,9 +74,61 @@ def init_session_state():
         st.session_state.messages = []
     if "api_client" not in st.session_state:
         st.session_state.api_client = TCMClient()
+    if "show_manual_tongue_input" not in st.session_state:
+        st.session_state.show_manual_tongue_input = False
 
 
 init_session_state()
+
+
+# ==================== 辅助函数 ====================
+def continue_diagnosis(tongue_text: str):
+    """
+    继续诊断流程
+
+    Args:
+        tongue_text: 舌象描述文本
+    """
+    # 继续调用 API 获取医生回复
+    with st.spinner("🤔 正在分析..."):
+        response = st.session_state.api_client.send_message(
+            message=tongue_text,
+            session_id=st.session_state.session_id,
+            language="zh",
+        )
+
+    # 检查错误
+    if "error" in response:
+        render_error(response["error"])
+        st.stop()
+
+    # 更新会话 ID
+    if "session_id" in response:
+        st.session_state.session_id = response["session_id"]
+
+    # 提取助手消息
+    assistant_data = response.get("assistant_message", {})
+    assistant_message = {
+        "role": "assistant",
+        "content": assistant_data.get("content", ""),
+        "timestamp": assistant_data.get("timestamp", datetime.now().isoformat()),
+        "is_diagnosis": assistant_data.get("is_diagnosis", False),
+        "tool_calls": assistant_data.get("tool_calls", []),
+        "requires_tongue_image": response.get("requires_tongue_image", False),
+        "requires_pulse_input": response.get("requires_pulse_input", False),
+    }
+    st.session_state.messages.append(assistant_message)
+
+    # 显示助手回复
+    render_message(assistant_message)
+
+    # 如果是诊断结果，显示完成提示
+    if assistant_message["is_diagnosis"]:
+        st.markdown("---")
+        render_success("辨证诊断完成！如果您还有其他问题，请继续描述。")
+
+    # 重新运行以更新界面
+    st.rerun()
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
@@ -147,14 +199,26 @@ for message in st.session_state.messages:
 show_tongue_upload = False
 if st.session_state.messages:
     last_message = st.session_state.messages[-1]
-    if last_message.get("role") == "assistant" and last_message.get("requires_tongue_image"):
+    # 只有当需要舌诊且还未完成诊断时才显示上传区
+    if (last_message.get("role") == "assistant" and
+        last_message.get("requires_tongue_image") and
+        not last_message.get("is_diagnosis")):
         show_tongue_upload = True
 
+# 检查最后一条用户消息是否已经是舌诊结果（防止重复处理）
+has_tongue_result = False
 if show_tongue_upload:
+    for msg in reversed(st.session_state.messages):
+        if msg.get("role") == "user":
+            has_tongue_result = msg.get("content", "").startswith("舌诊结果：")
+            break
+
+if show_tongue_upload and not has_tongue_result:
     st.markdown("---")
     st.markdown("#### 👅 医生建议上传舌象图片")
     st.caption("请拍摄舌头的清晰照片（自然光下，伸舌放松）")
 
+    # 上传舌象图片
     uploaded_tongue_image = st.file_uploader(
         "选择舌象图片",
         type=["jpg", "jpeg", "png"],
@@ -162,13 +226,26 @@ if show_tongue_upload:
         label_visibility="visible",
     )
 
+    # 或者手动描述
+    st.markdown("---")
+    st.markdown("##### 或手动描述舌象")
+    if st.button("✏️ 手动输入舌象信息", use_container_width=True, key="btn_manual_input"):
+        st.session_state.show_manual_tongue_input = True
+
+    # 处理图片上传
     if uploaded_tongue_image is not None:
         # 显示上传中的状态
         with st.spinner("🔍 正在分析舌象..."):
-            # 调用舌诊 API
             result = st.session_state.api_client.upload_tongue_image(uploaded_tongue_image)
 
         if result.get("success"):
+            # 重置手动输入状态
+            st.session_state.show_manual_tongue_input = False
+
+            # 显示成功消息（如果有警告）
+            if result.get("partial"):
+                st.warning(f"⚠️ {result.get('warning', '部分特征未能识别')}")
+
             # 格式化舌诊结果为文本
             tongue_data = result.get("data", {})
             tongue_text = f"""舌诊结果：
@@ -189,43 +266,62 @@ if show_tongue_upload:
                 st.markdown(tongue_text)
 
             # 继续调用 API 获取医生回复
-            with st.spinner("🤔 正在分析..."):
-                response = st.session_state.api_client.send_message(
-                    message=tongue_text,
-                    session_id=st.session_state.session_id,
-                    language="zh",
-                )
+            continue_diagnosis(tongue_text)
 
-            # 检查错误
-            if "error" not in response:
-                # 更新会话 ID
-                if "session_id" in response:
-                    st.session_state.session_id = response["session_id"]
-
-                # 提取助手消息
-                assistant_data = response.get("assistant_message", {})
-                assistant_message = {
-                    "role": "assistant",
-                    "content": assistant_data.get("content", ""),
-                    "timestamp": assistant_data.get("timestamp", datetime.now().isoformat()),
-                    "is_diagnosis": assistant_data.get("is_diagnosis", False),
-                    "tool_calls": assistant_data.get("tool_calls", []),
-                    "requires_tongue_image": response.get("requires_tongue_image", False),
-                }
-                st.session_state.messages.append(assistant_message)
-
-                # 显示助手回复
-                render_message(assistant_message)
-
-                # 如果是诊断结果，显示完成提示
-                if assistant_message["is_diagnosis"]:
-                    st.markdown("---")
-                    render_success("辨证诊断完成！如果您还有其他问题，请继续描述。")
-
-            # 重新运行以更新界面
-            st.rerun()
         else:
-            render_error(result.get("error", "舌诊分析失败"))
+            # 上传或识别失败
+            error_msg = result.get("error", "舌诊分析失败")
+            error_type = result.get("error_type", "unknown")
+
+            if error_type == "upload_failed":
+                st.error(f"❌ 上传失败：{error_msg}")
+            elif error_type == "recognize_failed":
+                st.error(f"❌ 识别失败：{error_msg}")
+            elif error_type == "invalid_data":
+                st.error(f"❌ 识别结果异常：{error_msg}")
+
+            # 兜底策略：显示手动输入选项
+            st.markdown("---")
+            st.info("💡 您可以选择手动描述舌象，继续完成诊断")
+            st.session_state.show_manual_tongue_input = True
+
+    # 手动输入舌象信息（兜底策略）
+    if st.session_state.show_manual_tongue_input:
+        st.markdown("##### ✏️ 手动描述舌象")
+        st.caption("请用一句话描述您的舌象情况，例如：舌淡红，苔薄白，有齿痕")
+
+        with st.form("manual_tongue_form"):
+            tongue_desc = st.text_area(
+                "舌象描述",
+                placeholder="例如：舌质淡红，舌苔薄白，舌体胖大有齿痕...",
+                height=80,
+                label_visibility="visible",
+            )
+
+            submitted = st.form_submit_button("提交", use_container_width=True)
+
+            if submitted and tongue_desc.strip():
+                # 构建舌象描述文本
+                tongue_text = f"舌诊结果：{tongue_desc.strip()}"
+
+                # 添加用户消息
+                user_message = {
+                    "role": "user",
+                    "content": tongue_text,
+                    "timestamp": datetime.now().isoformat(),
+                }
+                st.session_state.messages.append(user_message)
+
+                # 立即显示用户消息
+                with st.chat_message("user"):
+                    st.markdown(tongue_text)
+
+                # 重置手动输入状态
+                st.session_state.show_manual_tongue_input = False
+
+                # 继续诊断
+                continue_diagnosis(tongue_text)
+
     st.markdown("---")
 
 # ==================== 输入区 ====================
@@ -243,6 +339,13 @@ if user_input:
     # 立即显示用户消息
     with st.chat_message("user"):
         st.markdown(user_input)
+
+    # 如果用户回复了舌诊请求，清除之前的标记
+    if st.session_state.messages:
+        for msg in reversed(st.session_state.messages):
+            if msg.get("role") == "assistant" and msg.get("requires_tongue_image"):
+                msg["requires_tongue_image"] = False
+                break
 
     # 调用 API
     with st.spinner("🤔 正在分析..."):
@@ -270,6 +373,7 @@ if user_input:
         "is_diagnosis": assistant_data.get("is_diagnosis", False),
         "tool_calls": assistant_data.get("tool_calls", []),
         "requires_tongue_image": response.get("requires_tongue_image", False),
+        "requires_pulse_input": response.get("requires_pulse_input", False),
     }
     st.session_state.messages.append(assistant_message)
 

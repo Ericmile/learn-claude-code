@@ -94,6 +94,7 @@ async def send_message(
         ),
         requires_follow_up=result["requires_follow_up"],
         requires_tongue_image=result.get("requires_tongue_image", False),
+        requires_pulse_input=result.get("requires_pulse_input", False),
     )
 
 

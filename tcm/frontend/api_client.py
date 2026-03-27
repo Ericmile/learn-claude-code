@@ -127,7 +127,12 @@ class TCMClient:
             image_file: 图片文件对象
 
         Returns:
-            舌诊分析结果，包含舌质、舌苔、舌体等信息
+            舌诊分析结果，包含：
+            - success: 是否成功
+            - data: 舌诊数据（成功时）
+            - error: 错误信息（失败时）
+            - error_type: 错误类型
+            - allow_manual_input: 是否允许手动输入
         """
         try:
             files = {"file": (image_file.name, image_file, image_file.type)}
@@ -137,6 +142,26 @@ class TCMClient:
                 timeout=30,
             )
             resp.raise_for_status()
-            return {"success": True, "data": resp.json()}
+            # 直接返回 API 响应，已包含 success/error 等字段
+            return resp.json()
+        except requests.exceptions.Timeout:
+            return {
+                "success": False,
+                "error": "上传超时，请检查网络后重试",
+                "error_type": "upload_failed",
+                "allow_manual_input": True,
+            }
+        except requests.exceptions.ConnectionError:
+            return {
+                "success": False,
+                "error": "无法连接到服务器，请检查后端服务是否启动",
+                "error_type": "upload_failed",
+                "allow_manual_input": True,
+            }
         except requests.exceptions.RequestException as e:
-            return {"success": False, "error": f"上传失败：{str(e)}"}
+            return {
+                "success": False,
+                "error": f"上传失败：{str(e)}",
+                "error_type": "upload_failed",
+                "allow_manual_input": True,
+            }

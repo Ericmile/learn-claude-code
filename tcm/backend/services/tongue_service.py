@@ -28,16 +28,28 @@ class TongueService:
 
         Returns:
             舌诊分析结果，包含：
-            - color: 舌色（淡白舌、淡红舌、红舌等）
-            - crack: 裂痕情况
-            - coat_color: 苔色
-            - coat_thickness: 苔厚薄
-            - fat_thin: 胖瘦
-            - dry_wet: 干润
-            - mark: 齿痕
-            - point: 点刺
-            - seg_image: 分割图片的 base64
+            - success: 是否成功
+            - data: 舌诊数据（成功时）
+            - error: 错误信息（失败时）
+            - error_type: 错误类型（upload_failed/recognize_failed/invalid_data）
         """
+        # 1. 验证图片数据
+        if not image_bytes or len(image_bytes) == 0:
+            logger.error("上传的图片数据为空")
+            return {
+                "success": False,
+                "error": "上传的图片文件为空，请重新选择",
+                "error_type": "upload_failed",
+            }
+
+        if len(image_bytes) > 10 * 1024 * 1024:
+            logger.error(f"图片文件过大: {len(image_bytes)} bytes")
+            return {
+                "success": False,
+                "error": "图片文件大小不能超过10MB，请压缩后重新上传",
+                "error_type": "upload_failed",
+            }
+
         try:
             files = {"file": (filename, image_bytes, "image/jpeg")}
 
@@ -50,15 +62,28 @@ class TongueService:
             # 记录原始响应用于调试
             logger.info(f"舌诊API响应状态: {response.status_code}")
 
-            # 检查是否成功
+            # 2. 处理上传失败的情况
             if response.status_code != 200:
                 logger.warning(f"舌诊API返回非200状态: {response.status_code}, 响应: {response.text[:200]}")
                 return {
                     "success": False,
-                    "error": f"舌诊分析失败（状态码: {response.status_code}）",
+                    "error": "舌象识别服务暂时不可用，请稍后重试",
+                    "error_type": "recognize_failed",
+                    "allow_manual_input": True,  # 允许手动输入
                 }
 
-            data = response.json()
+            # 3. 解析响应数据
+            try:
+                data = response.json()
+            except ValueError as e:
+                logger.error(f"解析API响应失败: {str(e)}, 响应内容: {response.text[:200]}")
+                return {
+                    "success": False,
+                    "error": "舌象识别返回数据格式异常，请稍后重试",
+                    "error_type": "recognize_failed",
+                    "allow_manual_input": True,
+                }
+
             logger.info(f"舌诊API返回数据: {data}")
 
             # 检查API返回的错误信息
@@ -67,7 +92,9 @@ class TongueService:
                 logger.warning(f"舌诊API返回错误: {error_msg}")
                 return {
                     "success": False,
-                    "error": f"舌诊分析失败：{error_msg}",
+                    "error": f"舌象识别失败：{error_msg}",
+                    "error_type": "recognize_failed",
+                    "allow_manual_input": True,
                 }
 
             # 提取实际数据（可能在data字段中）
@@ -75,6 +102,27 @@ class TongueService:
             if not tongue_data:
                 # 如果没有data字段，直接使用根数据
                 tongue_data = data
+
+            # 4. 验证识别结果的完整性
+            required_fields = ["color", "coat_color", "coat_thickness", "fat_thin",
+                             "dry_wet", "mark", "point", "crack"]
+            missing_fields = [f for f in required_fields if f not in tongue_data or not tongue_data[f]]
+
+            if missing_fields:
+                logger.warning(f"舌诊识别结果不完整，缺少字段: {missing_fields}")
+                # 即使不完整也返回已有数据，但标记为部分成功
+                pass
+
+            # 5. 检查识别结果是否异常（所有值都是"未知"或空）
+            valid_values = [v for v in tongue_data.values() if v and v != "未知"]
+            if len(valid_values) == 0:
+                logger.error("舌诊识别结果全部为空或未知")
+                return {
+                    "success": False,
+                    "error": "未能从图片中识别出舌象特征，请确保图片清晰后重新上传",
+                    "error_type": "invalid_data",
+                    "allow_manual_input": True,
+                }
 
             # 格式化舌诊结果
             result = {
@@ -90,19 +138,45 @@ class TongueService:
                     "point": tongue_data.get("point", "未知"),
                     "seg_image": tongue_data.get("seg_image", ""),
                 },
+                "partial": len(missing_fields) > 0,  # 标记是否为部分识别
             }
+
+            if result["partial"]:
+                result["warning"] = f"部分特征未能识别（{len(missing_fields)}项），您可以补充描述"
 
             return result
 
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.Timeout:
+            logger.error("舌诊API调用超时")
             return {
                 "success": False,
-                "error": f"舌诊API调用失败：{str(e)}",
+                "error": "舌象识别超时，请稍后重试",
+                "error_type": "recognize_failed",
+                "allow_manual_input": True,
+            }
+        except requests.exceptions.ConnectionError:
+            logger.error("舌诊API连接失败")
+            return {
+                "success": False,
+                "error": "无法连接到舌象识别服务，请检查网络或稍后重试",
+                "error_type": "recognize_failed",
+                "allow_manual_input": True,
+            }
+        except requests.exceptions.RequestException as e:
+            logger.error(f"舌诊API请求异常: {str(e)}")
+            return {
+                "success": False,
+                "error": "舌象识别服务异常，请稍后重试",
+                "error_type": "recognize_failed",
+                "allow_manual_input": True,
             }
         except Exception as e:
+            logger.error(f"舌诊分析未知错误: {str(e)}", exc_info=True)
             return {
                 "success": False,
-                "error": f"舌诊分析出错：{str(e)}",
+                "error": "舌象分析过程中发生错误，请稍后重试",
+                "error_type": "recognize_failed",
+                "allow_manual_input": True,
             }
 
     def format_diagnosis_text(self, data: Dict[str, Any]) -> str:

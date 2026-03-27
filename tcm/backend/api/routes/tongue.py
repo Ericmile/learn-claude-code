@@ -28,29 +28,32 @@ async def upload_tongue_image(
 
     Returns:
         舌诊分析结果，包含舌质、舌苔、舌体等信息
+        或者错误信息，包含 error_type 和 allow_manual_input
     """
     # 验证文件类型
     if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="请上传图片文件")
+        return {
+            "success": False,
+            "error": "请上传图片文件（支持 JPG、PNG 格式）",
+            "error_type": "upload_failed",
+            "allow_manual_input": True,
+        }
 
     try:
         # 读取文件内容
         image_bytes = await file.read()
 
-        # 检查文件大小（限制为10MB）
-        if len(image_bytes) > 10 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="图片文件大小不能超过10MB")
-
         # 调用舌诊服务
-        result = tongue_service.upload_image(image_bytes, file.filename)
+        result = tongue_service.upload_image(image_bytes, file.filename or "tongue.jpg")
 
-        if not result.get("success"):
-            raise HTTPException(status_code=500, detail=result.get("error", "舌诊分析失败"))
+        # 返回完整结果（包含成功和失败的所有情况）
+        return result
 
-        return result["data"]
-
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"舌诊上传处理错误：{str(e)}")
-        raise HTTPException(status_code=500, detail=f"舌诊分析失败：{str(e)}")
+        logger.error(f"舌诊上传处理错误：{str(e)}", exc_info=True)
+        return {
+            "success": False,
+            "error": "舌诊分析过程中发生错误，请稍后重试",
+            "error_type": "recognize_failed",
+            "allow_manual_input": True,
+        }

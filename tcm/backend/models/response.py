@@ -32,6 +32,7 @@ class ChatResponse(BaseModel):
     assistant_message: AssistantMessage
     requires_follow_up: bool = True
     requires_tongue_image: bool = False  # 是否需要舌诊图片
+    requires_pulse_input: bool = False  # 是否需要脉象输入
 
 
 class SessionResponse(BaseModel):
