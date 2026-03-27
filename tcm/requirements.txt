@@ -1,0 +1,22 @@
+# TCM Agent Backend Dependencies
+
+# Anthropic API
+anthropic>=0.25.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# FastAPI and server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Pydantic
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# HTTP client
+httpx>=0.25.0
+requests>=2.31.0
+
+# Frontend
+streamlit>=1.31.0
